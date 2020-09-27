@@ -385,22 +385,18 @@ def str_to_tokens(sentence: str):
         result = tokenizer.word_index.get(current_word, '')
         if result != '':
             tokens_list.append(result)
-    return pad_sequences([tokens_list],
-                         maxlen=MAX_LENGTH,
-                         padding='post')
+    return tokens_list
 
 
 def evaluate(inp_sentence):
-    start_token = tokenizer.word_index['start']
-    end_token = tokenizer.word_index['end']
 
     # inp sentence is portuguese, hence adding the start and end token
-    inp_sentence = start_token + str_to_tokens(inp_sentence) + end_token
+    inp_sentence = str_to_tokens(inp_sentence)
     encoder_input = tf.expand_dims(inp_sentence, 0)
 
     # as the target is english, the first word to the transformer should be the
     # english start token.
-    decoder_input = tokenizer.word_index['start']
+    decoder_input = [tokenizer.word_index['start']]
     output = tf.expand_dims(decoder_input, 0)
 
     for i in range(MAX_LENGTH):
