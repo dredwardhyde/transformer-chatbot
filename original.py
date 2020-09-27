@@ -1,108 +1,50 @@
-import io
 import os
-import re
 import time
-import zipfile
 
 import numpy as np
-import requests
 import tensorflow as tf
-import yaml
-from keras_preprocessing.text import Tokenizer
-from tensorflow.keras.preprocessing.sequence import pad_sequences
+import tensorflow_datasets as tfds
 
 os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 
+examples, metadata = tfds.load('ted_hrlr_translate/pt_to_en', with_info=True, as_supervised=True)
+train_examples, val_examples = examples['train'], examples['validation']
+
+tokenizer_en = tfds.features.text.SubwordTextEncoder.build_from_corpus(
+    (en.numpy() for pt, en in train_examples), target_vocab_size=2 ** 13)
+
+tokenizer_pt = tfds.features.text.SubwordTextEncoder.build_from_corpus(
+    (pt.numpy() for pt, en in train_examples), target_vocab_size=2 ** 13)
+
+BUFFER_SIZE = 20000
 BATCH_SIZE = 64
 MAX_LENGTH = 40
 
-########################################################################################################################
-########################################### DATA PREPARATION ###########################################################
-########################################################################################################################
-r = requests.get('https://github.com/shubham0204/Dataset_Archives/blob/master/chatbot_nlp.zip?raw=true')
-z = zipfile.ZipFile(io.BytesIO(r.content))
-z.extractall()
 
-dir_path = 'chatbot_nlp/data'
-files_list = os.listdir(dir_path + os.sep)
+def encode(lang1, lang2):
+    lang1 = [tokenizer_pt.vocab_size] + tokenizer_pt.encode(lang1.numpy()) + [tokenizer_pt.vocab_size + 1]
+    lang2 = [tokenizer_en.vocab_size] + tokenizer_en.encode(lang2.numpy()) + [tokenizer_en.vocab_size + 1]
+    return lang1, lang2
 
 
-def clean_text(text_to_clean):
-    res = text_to_clean.lower()
-    res = re.sub(r"i'm", "i am", res)
-    res = re.sub(r"he's", "he is", res)
-    res = re.sub(r"she's", "she is", res)
-    res = re.sub(r"it's", "it is", res)
-    res = re.sub(r"that's", "that is", res)
-    res = re.sub(r"what's", "what is", res)
-    res = re.sub(r"where's", "where is", res)
-    res = re.sub(r"how's", "how is", res)
-    res = re.sub(r"\'ll", " will", res)
-    res = re.sub(r"\'ve", " have", res)
-    res = re.sub(r"\'re", " are", res)
-    res = re.sub(r"\'d", " would", res)
-    res = re.sub(r"\'re", " are", res)
-    res = re.sub(r"won't", "will not", res)
-    res = re.sub(r"can't", "cannot", res)
-    res = re.sub(r"n't", " not", res)
-    res = re.sub(r"n'", "ng", res)
-    res = re.sub(r"'bout", "about", res)
-    res = re.sub(r"'til", "until", res)
-    return res
-
-
-questions = list()
-answers = list()
-for filepath in files_list:
-    stream = open(dir_path + os.sep + filepath, 'rb')
-    docs = yaml.safe_load(stream)
-    conversations = docs['conversations']
-    for con in conversations:
-        if len(con) > 2:
-            questions.append('<START> ' + clean_text(con[0]) + ' <END>')
-            ans = ''
-            for rep in con[1:]:
-                ans += ' ' + rep
-            answers.append(ans)
-        elif len(con) > 1:
-            questions.append('<START> ' + clean_text(con[0]) + ' <END>')
-            answers.append(con[1])
-answers_with_tags = list()
-for i in range(len(answers)):
-    if type(answers[i]) == str:
-        answers_with_tags.append(clean_text(answers[i]))
-    else:
-        questions.pop(i)
-answers = list()
-for i in range(len(answers_with_tags)):
-    answers.append('<START> ' + answers_with_tags[i] + ' <END>')
-print(len(questions))
-print(len(answers))
-########################################################################################################################
-############################################# MODEL TRAINING ###########################################################
-########################################################################################################################
-
-tokenizer = Tokenizer()
-tokenizer.fit_on_texts(questions + answers)
-VOCAB_SIZE = len(tokenizer.word_index) + 1
-print('Vocabulary size : {}'.format(VOCAB_SIZE))
-
-tokenized_questions = tokenizer.texts_to_sequences(questions)
-encoder_input_data = pad_sequences(tokenized_questions,
-                                   maxlen=MAX_LENGTH,
-                                   padding='post')
-
-print(encoder_input_data.shape)
-
-tokenized_answers = tokenizer.texts_to_sequences(answers)
-decoder_input_data = pad_sequences(tokenized_answers,
-                                   maxlen=MAX_LENGTH,
-                                   padding='post')
-print(decoder_input_data.shape)
+def tf_encode(pt, en):
+    result_pt, result_en = tf.py_function(encode, [pt, en], [tf.int64, tf.int64])
+    result_pt.set_shape([None])
+    result_en.set_shape([None])
+    return result_pt, result_en
 
 
 def filter_max_length(x, y, max_length=MAX_LENGTH):
     return tf.logical_and(tf.size(x) <= max_length, tf.size(y) <= max_length)
+
+
+train_dataset = train_examples.map(tf_encode)
+train_dataset = train_dataset.filter(filter_max_length)
+train_dataset = train_dataset.cache()
+train_dataset = train_dataset.shuffle(BUFFER_SIZE).padded_batch(BATCH_SIZE)
+train_dataset = train_dataset.prefetch(tf.data.experimental.AUTOTUNE)
+val_dataset = val_examples.map(tf_encode)
+val_dataset = val_dataset.filter(filter_max_length).padded_batch(BATCH_SIZE)
 
 
 def get_angles(pos, i, d_model):
@@ -293,21 +235,9 @@ num_layers = 6
 d_model = 256
 dff = 1024
 num_heads = 8
-input_vocab_size = VOCAB_SIZE
-target_vocab_size = VOCAB_SIZE
+input_vocab_size = tokenizer_pt.vocab_size + 2
+target_vocab_size = tokenizer_en.vocab_size + 2
 dropout_rate = 0.1
-
-
-def batch_generator(batch_size):
-    while True:
-        x_shape = (batch_size, MAX_LENGTH)
-        x_batch = np.zeros(shape=x_shape, dtype=np.float32)
-        y_batch = np.zeros(shape=x_shape, dtype=np.float32)
-        for i in range(batch_size):
-            idx = np.random.randint(0, encoder_input_data.shape[0])
-            x_batch[i] = encoder_input_data[idx]
-            y_batch[i] = decoder_input_data[idx]
-        yield x_batch, y_batch
 
 
 class CustomSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
@@ -326,7 +256,6 @@ class CustomSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
 learning_rate = CustomSchedule(d_model)
 optimizer = tf.keras.optimizers.Adam(learning_rate, beta_1=0.9, beta_2=0.98, epsilon=1e-9)
 loss_object = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True, reduction='none')
-generator = batch_generator(batch_size=BATCH_SIZE)
 
 
 def loss_function(real, pred):
@@ -346,7 +275,6 @@ transformer = Transformer(num_layers, d_model, num_heads, dff,
                           rate=dropout_rate)
 
 
-
 def create_masks(input, target):
     enc_padding_mask = create_padding_mask(input)
     dec_padding_mask = create_padding_mask(input)
@@ -356,9 +284,14 @@ def create_masks(input, target):
     return enc_padding_mask, combined_mask, dec_padding_mask
 
 
-EPOCHS = 100
+EPOCHS = 50
+train_step_signature = [
+    tf.TensorSpec(shape=(None, None), dtype=tf.int64),
+    tf.TensorSpec(shape=(None, None), dtype=tf.int64),
+]
 
 
+@tf.function(input_signature=train_step_signature)
 def train_step(inp, tar):
     tar_inp = tar[:, :-1]
     tar_real = tar[:, 1:]
@@ -376,55 +309,11 @@ def train_step(inp, tar):
     train_accuracy(tar_real, predictions)
 
 
-def str_to_tokens(sentence: str):
-    words = sentence.lower().split()
-    tokens_list = list()
-    for current_word in words:
-        result = tokenizer.word_index.get(current_word, '')
-        if result != '':
-            tokens_list.append(result)
-    return tokens_list
-
-
-def evaluate(inp_sentence):
-    inp_sentence = str_to_tokens(inp_sentence)
-    encoder_input = tf.expand_dims(inp_sentence, 0)
-    decoder_input = [tokenizer.word_index['start']]
-    output = tf.expand_dims(decoder_input, 0)
-    for _ in range(MAX_LENGTH):
-        enc_padding_mask, combined_mask, dec_padding_mask = create_masks(
-            encoder_input, output)
-        predictions, attention_weights = transformer(encoder_input,
-                                                     output,
-                                                     False,
-                                                     enc_padding_mask,
-                                                     combined_mask,
-                                                     dec_padding_mask)
-        predictions = predictions[:, -1:, :]
-        predicted_id = tf.cast(tf.argmax(predictions, axis=-1), tf.int32)
-        if predicted_id == tokenizer.word_index['end']:
-            return tf.squeeze(output, axis=0), attention_weights
-        output = tf.concat([output, predicted_id], axis=-1)
-    return tf.squeeze(output, axis=0), attention_weights
-
-
-def translate(sentence):
-    result, attention_weights = evaluate(sentence)
-    predicted_sentence = ''
-    for i in result:
-        for word, index in tokenizer.word_index.items():
-            if i == index:
-                predicted_sentence += ' {}'.format(word)
-    print('Input: {}'.format(sentence))
-    print('Predicted translation: {}'.format(predicted_sentence))
-
-
 for epoch in range(EPOCHS):
     start = time.time()
     train_loss.reset_states()
     train_accuracy.reset_states()
-    for batch in range(0, 1000):
-        inp, tar = next(generator)
+    for (batch, (inp, tar)) in enumerate(train_dataset):
         train_step(inp, tar)
         if batch % 50 == 0:
             print('Epoch {} Batch {} Loss {:.4f} Accuracy {:.4f}'.format(
@@ -432,5 +321,56 @@ for epoch in range(EPOCHS):
     print('Epoch {} Loss {:.4f} Accuracy {:.4f}'.format(epoch + 1, train_loss.result(), train_accuracy.result()))
     print('Time taken for 1 epoch: {} secs\n'.format(time.time() - start))
 
-print(translate('What is AI?'))
-print(translate('What is a computer?'))
+
+def evaluate(inp_sentence):
+    start_token = [tokenizer_pt.vocab_size]
+    end_token = [tokenizer_pt.vocab_size + 1]
+
+    # inp sentence is portuguese, hence adding the start and end token
+    inp_sentence = start_token + tokenizer_pt.encode(inp_sentence) + end_token
+    encoder_input = tf.expand_dims(inp_sentence, 0)
+
+    # as the target is english, the first word to the transformer should be the
+    # english start token.
+    decoder_input = [tokenizer_en.vocab_size]
+    output = tf.expand_dims(decoder_input, 0)
+
+    for i in range(MAX_LENGTH):
+        enc_padding_mask, combined_mask, dec_padding_mask = create_masks(
+            encoder_input, output)
+
+        # predictions.shape == (batch_size, seq_len, vocab_size)
+        predictions, attention_weights = transformer(encoder_input,
+                                                     output,
+                                                     False,
+                                                     enc_padding_mask,
+                                                     combined_mask,
+                                                     dec_padding_mask)
+
+        # select the last word from the seq_len dimension
+        predictions = predictions[:, -1:, :]  # (batch_size, 1, vocab_size)
+
+        predicted_id = tf.cast(tf.argmax(predictions, axis=-1), tf.int32)
+
+        # return the result if the predicted_id is equal to the end token
+        if predicted_id == tokenizer_en.vocab_size + 1:
+            return tf.squeeze(output, axis=0), attention_weights
+
+        # concatentate the predicted_id to the output which is given to the decoder
+        # as its input.
+        output = tf.concat([output, predicted_id], axis=-1)
+
+    return tf.squeeze(output, axis=0), attention_weights
+
+
+def translate(sentence):
+    result, attention_weights = evaluate(sentence)
+
+    predicted_sentence = tokenizer_en.decode([i for i in result
+                                              if i < tokenizer_en.vocab_size])
+
+    print('Input: {}'.format(sentence))
+    print('Predicted translation: {}'.format(predicted_sentence))
+
+
+translate("este é um problema que temos que resolver.")
