@@ -49,7 +49,6 @@ def clean_text(text_to_clean):
     res = re.sub(r"n'", "ng", res)
     res = re.sub(r"'bout", "about", res)
     res = re.sub(r"'til", "until", res)
-    res = re.sub(r"[-()\"#/@;:<>{}`+=~|.!?,]", "", res)
     return res
 
 
@@ -84,8 +83,7 @@ print(len(answers))
 ############################################# MODEL TRAINING ###########################################################
 ########################################################################################################################
 
-target_regex = '!"#$%&()*+,-./:;<=>?@[\]^_`{|}~\t\n\'0123456789'
-tokenizer = Tokenizer(filters=target_regex)
+tokenizer = Tokenizer()
 tokenizer.fit_on_texts(questions + answers)
 VOCAB_SIZE = len(tokenizer.word_index) + 1
 print('Vocabulary size : {}'.format(VOCAB_SIZE))
@@ -307,7 +305,7 @@ def batch_generator(batch_size):
         x_batch = np.zeros(shape=x_shape, dtype=np.float32)
         y_batch = np.zeros(shape=x_shape, dtype=np.float32)
         for i in range(batch_size):
-            idx = np.random.randint(encoder_input_data.shape[0])
+            idx = np.random.randint(0, encoder_input_data.shape[0])
             x_batch[i] = encoder_input_data[idx]
             y_batch[i] = decoder_input_data[idx]
         yield x_batch, y_batch
@@ -435,3 +433,4 @@ for epoch in range(EPOCHS):
     print('Time taken for 1 epoch: {} secs\n'.format(time.time() - start))
 
 print(translate('What is AI?'))
+print(translate('What is a computer?'))
