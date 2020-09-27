@@ -61,18 +61,18 @@ for filepath in files_list:
     conversations = docs['conversations']
     for con in conversations:
         if len(con) > 2:
-            questions.append(con[0])
+            questions.append(clean_text(con[0]))
             ans = ''
             for rep in con[1:]:
                 ans += ' ' + rep
             answers.append(ans)
         elif len(con) > 1:
-            questions.append(con[0])
+            questions.append(clean_text(con[0]))
             answers.append(con[1])
 answers_with_tags = list()
 for i in range(len(answers)):
     if type(answers[i]) == str:
-        answers_with_tags.append(answers[i])
+        answers_with_tags.append(clean_text(answers[i]))
     else:
         questions.pop(i)
 answers = list()
@@ -389,41 +389,24 @@ def str_to_tokens(sentence: str):
 
 
 def evaluate(inp_sentence):
-
-    # inp sentence is portuguese, hence adding the start and end token
     inp_sentence = str_to_tokens(inp_sentence)
     encoder_input = tf.expand_dims(inp_sentence, 0)
-
-    # as the target is english, the first word to the transformer should be the
-    # english start token.
     decoder_input = [tokenizer.word_index['start']]
     output = tf.expand_dims(decoder_input, 0)
-
-    for i in range(MAX_LENGTH):
+    for _ in range(MAX_LENGTH):
         enc_padding_mask, combined_mask, dec_padding_mask = create_masks(
             encoder_input, output)
-
-        # predictions.shape == (batch_size, seq_len, vocab_size)
         predictions, attention_weights = transformer(encoder_input,
                                                      output,
                                                      False,
                                                      enc_padding_mask,
                                                      combined_mask,
                                                      dec_padding_mask)
-
-        # select the last word from the seq_len dimension
-        predictions = predictions[:, -1:, :]  # (batch_size, 1, vocab_size)
-
+        predictions = predictions[:, -1:, :]
         predicted_id = tf.cast(tf.argmax(predictions, axis=-1), tf.int32)
-
-        # return the result if the predicted_id is equal to the end token
         if predicted_id == tokenizer.word_index['end']:
             return tf.squeeze(output, axis=0), attention_weights
-
-        # concatentate the predicted_id to the output which is given to the decoder
-        # as its input.
         output = tf.concat([output, predicted_id], axis=-1)
-
     return tf.squeeze(output, axis=0), attention_weights
 
 
