@@ -304,8 +304,8 @@ dropout_rate = 0.1
 def batch_generator(batch_size):
     while True:
         x_shape = (batch_size, MAX_LENGTH)
-        x_batch = np.zeros(shape=x_shape, dtype=np.float16)
-        y_batch = np.zeros(shape=x_shape, dtype=np.float16)
+        x_batch = np.zeros(shape=x_shape, dtype=np.float32)
+        y_batch = np.zeros(shape=x_shape, dtype=np.float32)
         for i in range(batch_size):
             idx = np.random.randint(encoder_input_data.shape[0])
             x_batch[i] = encoder_input_data[idx]
@@ -358,14 +358,9 @@ def create_masks(input, target):
     return enc_padding_mask, combined_mask, dec_padding_mask
 
 
-EPOCHS = 20
-train_step_signature = [
-    tf.TensorSpec(shape=(None, None), dtype=tf.int64),
-    tf.TensorSpec(shape=(None, None), dtype=tf.int64),
-]
+EPOCHS = 10
 
 
-@tf.function(input_signature=train_step_signature)
 def train_step(inp, tar):
     tar_inp = tar[:, :-1]
     tar_real = tar[:, 1:]
