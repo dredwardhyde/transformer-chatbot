@@ -13,7 +13,7 @@ from tensorflow.keras.preprocessing.sequence import pad_sequences
 
 os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
-BATCH_SIZE = 256
+BATCH_SIZE = 64
 MAX_LENGTH = 40
 
 ########################################################################################################################
@@ -356,7 +356,7 @@ def create_masks(input, target):
     return enc_padding_mask, combined_mask, dec_padding_mask
 
 
-EPOCHS = 100
+EPOCHS = 150
 
 train_step_signature = [
     tf.TensorSpec(shape=(None, None), dtype=tf.int64),
@@ -429,7 +429,7 @@ for epoch in range(EPOCHS):
     start = time.time()
     train_loss.reset_states()
     train_accuracy.reset_states()
-    for batch in range(0, 510):
+    for batch in range(0, 1010):
         inp, tar = next(generator)
         train_step(inp, tar)
         if batch % 50 == 0:
