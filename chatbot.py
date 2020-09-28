@@ -13,7 +13,7 @@ from tensorflow.keras.preprocessing.sequence import pad_sequences
 
 os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 
-BATCH_SIZE = 256
+BATCH_SIZE = 128
 MAX_LENGTH = 40
 
 ########################################################################################################################
@@ -366,7 +366,7 @@ class CustomSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
         return tf.math.rsqrt(self.d_model) * tf.math.minimum(arg1, arg2)
 
 
-learning_rate = CustomSchedule(d_model)
+learning_rate = 3e-4
 optimizer = tf.keras.optimizers.Adam(learning_rate, beta_1=0.9, beta_2=0.98, epsilon=1e-9)
 loss_object = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True, reduction='none')
 generator = batch_generator(batch_size=BATCH_SIZE)
@@ -400,7 +400,13 @@ def create_masks(input, target):
 
 EPOCHS = 100
 
+train_step_signature = [
+    tf.TensorSpec(shape=(None, None), dtype=tf.int64),
+    tf.TensorSpec(shape=(None, None), dtype=tf.int64),
+]
 
+
+@tf.function(input_signature=train_step_signature)
 def train_step(inp, tar):
     tar_inp = tar[:, :-1]
     tar_real = tar[:, 1:]
@@ -465,7 +471,7 @@ for epoch in range(EPOCHS):
     start = time.time()
     train_loss.reset_states()
     train_accuracy.reset_states()
-    for batch in range(0, 410):
+    for batch in range(0, 510):
         inp, tar = next(generator)
         train_step(inp, tar)
         if batch % 50 == 0:
