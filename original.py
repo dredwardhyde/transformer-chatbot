@@ -5,7 +5,7 @@ import numpy as np
 import tensorflow as tf
 import tensorflow_datasets as tfds
 
-os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 
 examples, metadata = tfds.load('ted_hrlr_translate/pt_to_en', with_info=True, as_supervised=True)
 train_examples, val_examples = examples['train'], examples['validation']
@@ -231,7 +231,7 @@ class Transformer(tf.keras.Model):
         return final_output, attention_weights
 
 
-num_layers = 6
+num_layers = 4
 d_model = 256
 dff = 1024
 num_heads = 8
@@ -253,7 +253,7 @@ class CustomSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
         return tf.math.rsqrt(self.d_model) * tf.math.minimum(arg1, arg2)
 
 
-learning_rate = 3e-4
+learning_rate = CustomSchedule(d_model)
 optimizer = tf.keras.optimizers.Adam(learning_rate, beta_1=0.9, beta_2=0.98, epsilon=1e-9)
 loss_object = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True, reduction='none')
 
@@ -275,11 +275,11 @@ transformer = Transformer(num_layers, d_model, num_heads, dff,
                           rate=dropout_rate)
 
 
-def create_masks(input, target):
-    enc_padding_mask = create_padding_mask(input)
-    dec_padding_mask = create_padding_mask(input)
-    look_ahead_mask = create_look_ahead_mask(tf.shape(target)[1])
-    dec_target_padding_mask = create_padding_mask(target)
+def create_masks(inp, tar):
+    enc_padding_mask = create_padding_mask(inp)
+    dec_padding_mask = create_padding_mask(inp)
+    look_ahead_mask = create_look_ahead_mask(tf.shape(tar)[1])
+    dec_target_padding_mask = create_padding_mask(tar)
     combined_mask = tf.maximum(dec_target_padding_mask, look_ahead_mask)
     return enc_padding_mask, combined_mask, dec_padding_mask
 
