@@ -17,7 +17,7 @@ tokenizer_pt = tfds.features.text.SubwordTextEncoder.build_from_corpus(
     (pt.numpy() for pt, en in train_examples), target_vocab_size=2 ** 13)
 
 BUFFER_SIZE = 20000
-BATCH_SIZE = 64
+BATCH_SIZE = 128
 MAX_LENGTH = 40
 
 
