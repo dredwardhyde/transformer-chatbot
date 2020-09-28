@@ -4,46 +4,27 @@ import os
 import re
 import time
 import zipfile
-
+import yaml
 import numpy as np
 import requests
 import tensorflow as tf
 from keras_preprocessing.text import Tokenizer
 from tensorflow.keras.preprocessing.sequence import pad_sequences
 
-os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
-BATCH_SIZE = 128
+BATCH_SIZE = 256
 MAX_LENGTH = 40
 
 ########################################################################################################################
 ########################################### DATA PREPARATION ###########################################################
 ########################################################################################################################
-url = 'http://www.cs.cornell.edu/~cristian/data/cornell_movie_dialogs_corpus.zip'
-r = requests.get(url)
+r = requests.get('https://github.com/shubham0204/Dataset_Archives/blob/master/chatbot_nlp.zip?raw=true')
 z = zipfile.ZipFile(io.BytesIO(r.content))
 z.extractall()
 
-
-def get_all_conversations():
-    all_conversations = []
-    with codecs.open("./cornell movie-dialogs corpus/movie_lines.txt",
-                     "rb",
-                     encoding="utf-8",
-                     errors="ignore") as f:
-        lines = f.read().split("\n")
-        for line in lines:
-            all_conversations.append(line.split(" +++$+++ "))
-    return all_conversations
-
-
-def get_all_sorted_chats(all_conversations):
-    all_chats = {}
-    # get only first 10000 conversations from dataset because whole dataset will take 9.16 TiB of RAM
-    for tokens in all_conversations[:10000]:
-        if len(tokens) > 4:
-            all_chats[int(tokens[0][1:])] = tokens[4]
-    return sorted(all_chats.items(), key=lambda x: x[0])
+dir_path = 'chatbot_nlp/data'
+files_list = os.listdir(dir_path + os.sep)
 
 
 def clean_text(text_to_clean):
@@ -71,61 +52,38 @@ def clean_text(text_to_clean):
     return res
 
 
-def get_conversation_dict(sorted_chats):
-    conv_dict = {}
-    counter = 1
-    conv_ids = []
-    for i in range(1, len(sorted_chats) + 1):
-        if i < len(sorted_chats):
-            if (sorted_chats[i][0] - sorted_chats[i - 1][0]) == 1:
-                if sorted_chats[i - 1][1] not in conv_ids:
-                    conv_ids.append(sorted_chats[i - 1][1])
-                conv_ids.append(sorted_chats[i][1])
-            elif (sorted_chats[i][0] - sorted_chats[i - 1][0]) > 1:
-                conv_dict[counter] = conv_ids
-                conv_ids = []
-            counter += 1
-        else:
-            continue
-    return conv_dict
-
-
-def get_clean_q_and_a(conversations_dictionary):
-    ctx_and_target = []
-    for current_conv in conversations_dictionary.values():
-        if len(current_conv) % 2 != 0:
-            current_conv = current_conv[:-1]
-        for i in range(0, len(current_conv), 2):
-            ctx_and_target.append((current_conv[i], current_conv[i + 1]))
-    context, target = zip(*ctx_and_target)
-    context_dirty = list(context)
-    clean_questions = list()
-    for i in range(len(context_dirty)):
-        clean_questions.append(clean_text(context_dirty[i]))
-    target_dirty = list(target)
-    clean_answers = list()
-    for i in range(len(target_dirty)):
-        clean_answers.append('SOS '
-                             + clean_text(target_dirty[i])
-                             + ' EOS')
-    return clean_questions, clean_answers
-
-
-conversations = get_all_conversations()
-total = len(conversations)
-print("Total conversations in dataset: {}".format(total))
-all_sorted_chats = get_all_sorted_chats(conversations)
-conversation_dictionary = get_conversation_dict(all_sorted_chats)
-questions, answers = get_clean_q_and_a(conversation_dictionary)
-print("Questions in dataset: {}".format(len(questions)))
-print("Answers in dataset: {}".format(len(answers)))
-
+questions = list()
+answers = list()
+for filepath in files_list:
+    stream = open(dir_path + os.sep + filepath, 'rb')
+    docs = yaml.safe_load(stream)
+    conversations = docs['conversations']
+    for con in conversations:
+        if len(con) > 2:
+            questions.append('<START> ' + clean_text(con[0]) + ' <END>')
+            ans = ''
+            for rep in con[1:]:
+                ans += ' ' + rep
+            answers.append(ans)
+        elif len(con) > 1:
+            questions.append('<START> ' + clean_text(con[0]) + ' <END>')
+            answers.append(con[1])
+answers_with_tags = list()
+for i in range(len(answers)):
+    if type(answers[i]) == str:
+        answers_with_tags.append(clean_text(answers[i]))
+    else:
+        questions.pop(i)
+answers = list()
+for i in range(len(answers_with_tags)):
+    answers.append('<START> ' + answers_with_tags[i] + ' <END>')
+print(len(questions))
+print(len(answers))
 ########################################################################################################################
 ############################################# MODEL TRAINING ###########################################################
 ########################################################################################################################
 
-target_regex = '!"#$%&()*+,-./:;<=>?@[\]^_`{|}~\t\n\'0123456789'
-tokenizer = Tokenizer(filters=target_regex)
+tokenizer = Tokenizer()
 tokenizer.fit_on_texts(questions + answers)
 VOCAB_SIZE = len(tokenizer.word_index) + 1
 print('Vocabulary size : {}'.format(VOCAB_SIZE))
@@ -366,7 +324,7 @@ class CustomSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
         return tf.math.rsqrt(self.d_model) * tf.math.minimum(arg1, arg2)
 
 
-learning_rate = 3e-4
+learning_rate = CustomSchedule(d_model)
 optimizer = tf.keras.optimizers.Adam(learning_rate, beta_1=0.9, beta_2=0.98, epsilon=1e-9)
 loss_object = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True, reduction='none')
 generator = batch_generator(batch_size=BATCH_SIZE)
@@ -437,7 +395,7 @@ def str_to_tokens(sentence: str):
 def evaluate(inp_sentence):
     inp_sentence = str_to_tokens(inp_sentence)
     encoder_input = tf.expand_dims(inp_sentence, 0)
-    decoder_input = [tokenizer.word_index['sos']]
+    decoder_input = [tokenizer.word_index['start']]
     output = tf.expand_dims(decoder_input, 0)
     for _ in range(MAX_LENGTH):
         enc_padding_mask, combined_mask, dec_padding_mask = create_masks(
@@ -450,7 +408,7 @@ def evaluate(inp_sentence):
                                                      dec_padding_mask)
         predictions = predictions[:, -1:, :]
         predicted_id = tf.cast(tf.argmax(predictions, axis=-1), tf.int32)
-        if predicted_id == tokenizer.word_index['eos']:
+        if predicted_id == tokenizer.word_index['end']:
             return tf.squeeze(output, axis=0), attention_weights
         output = tf.concat([output, predicted_id], axis=-1)
     return tf.squeeze(output, axis=0), attention_weights
