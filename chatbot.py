@@ -2,6 +2,7 @@ import codecs
 import io
 import os
 import re
+import time
 import zipfile
 
 import numpy as np
@@ -377,7 +378,6 @@ def loss_function(real, pred):
 
 
 train_loss = tf.keras.metrics.Mean(name='train_loss')
-train_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='train_accuracy')
 transformer = Transformer(num_layers, d_model, num_heads, dff,
                           input_vocab_size, target_vocab_size,
                           pe_input=input_vocab_size,
@@ -417,7 +417,6 @@ def train_step(inp, tar):
     gradients = tape.gradient(loss, transformer.trainable_variables)
     optimizer.apply_gradients(zip(gradients, transformer.trainable_variables))
     train_loss(loss)
-    train_accuracy(tar_real, predictions)
 
 
 def str_to_tokens(sentence: str):
@@ -464,19 +463,18 @@ def translate(sentence):
 
 
 # ================================ TRAINING LOOP
-# for epoch in range(EPOCHS):
-#     start = time.time()
-#     train_loss.reset_states()
-#     generator = batch_generator(batch_size=BATCH_SIZE)
-#     train_accuracy.reset_states()
-#     while True:
-#         try:
-#             inp, tar = next(generator)
-#             train_step(inp, tar)
-#         except StopIteration:
-#             break
-#     print('Epoch {} Loss {:.4f} Accuracy {:.4f}'.format(epoch + 1, train_loss.result(), train_accuracy.result()))
-#     print('Time taken for 1 epoch: {} secs\n'.format(time.time() - start))
+for epoch in range(EPOCHS):
+    start = time.time()
+    train_loss.reset_states()
+    generator = batch_generator(batch_size=BATCH_SIZE)
+    while True:
+        try:
+            inp, tar = next(generator)
+            train_step(inp, tar)
+        except StopIteration:
+            break
+    print('Epoch {} Loss {:.4f} '.format(epoch + 1, train_loss.result()))
+    print('Time taken for 1 epoch: {} secs\n'.format(time.time() - start))
 
 # ================================= TESTING MODEL
 # Input phrase: have fun tonight
@@ -505,11 +503,11 @@ def translate(sentence):
 #
 # Input phrase: Dallas. Korben Dallas
 # Output phrase:  yes that is fine thank you very much a thousand times over
-generator = batch_generator(batch_size=1)
-inp, tar = next(generator)
-train_step(inp, tar)
-transformer.summary()
-transformer.load_weights("./weights.h5")
+# generator = batch_generator(batch_size=1)
+# inp, tar = next(generator)
+# train_step(inp, tar)
+# transformer.summary()
+# transformer.load_weights("./weights.h5")
 
 translate('have fun tonight')
 translate('did you change your hair')
