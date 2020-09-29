@@ -2,29 +2,47 @@ import codecs
 import io
 import os
 import re
-import time
 import zipfile
-import yaml
+
 import numpy as np
 import requests
 import tensorflow as tf
 from keras_preprocessing.text import Tokenizer
 from tensorflow.keras.preprocessing.sequence import pad_sequences
 
-os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 
-BATCH_SIZE = 64
+BATCH_SIZE = 128
 MAX_LENGTH = 40
 
 ########################################################################################################################
 ########################################### DATA PREPARATION ###########################################################
 ########################################################################################################################
-r = requests.get('https://github.com/shubham0204/Dataset_Archives/blob/master/chatbot_nlp.zip?raw=true')
+url = 'http://www.cs.cornell.edu/~cristian/data/cornell_movie_dialogs_corpus.zip'
+r = requests.get(url)
 z = zipfile.ZipFile(io.BytesIO(r.content))
 z.extractall()
 
-dir_path = 'chatbot_nlp/data'
-files_list = os.listdir(dir_path + os.sep)
+
+def get_all_conversations():
+    all_conversations = []
+    with codecs.open("./cornell movie-dialogs corpus/movie_lines.txt",
+                     "rb",
+                     encoding="utf-8",
+                     errors="ignore") as f:
+        lines = f.read().split("\n")
+        for line in lines:
+            all_conversations.append(line.split(" +++$+++ "))
+    return all_conversations
+
+
+def get_all_sorted_chats(all_conversations):
+    all_chats = {}
+    # get only first 10000 conversations from dataset because whole dataset will take 9.16 TiB of RAM
+    for tokens in all_conversations[:10000]:
+        if len(tokens) > 4:
+            all_chats[int(tokens[0][1:])] = tokens[4]
+    return sorted(all_chats.items(), key=lambda x: x[0])
 
 
 def clean_text(text_to_clean):
@@ -52,38 +70,61 @@ def clean_text(text_to_clean):
     return res
 
 
-questions = list()
-answers = list()
-for filepath in files_list:
-    stream = open(dir_path + os.sep + filepath, 'rb')
-    docs = yaml.safe_load(stream)
-    conversations = docs['conversations']
-    for con in conversations:
-        if len(con) > 2:
-            questions.append('<START> ' + clean_text(con[0]) + ' <END>')
-            ans = ''
-            for rep in con[1:]:
-                ans += ' ' + rep
-            answers.append(ans)
-        elif len(con) > 1:
-            questions.append('<START> ' + clean_text(con[0]) + ' <END>')
-            answers.append(con[1])
-answers_with_tags = list()
-for i in range(len(answers)):
-    if type(answers[i]) == str:
-        answers_with_tags.append(clean_text(answers[i]))
-    else:
-        questions.pop(i)
-answers = list()
-for i in range(len(answers_with_tags)):
-    answers.append('<START> ' + answers_with_tags[i] + ' <END>')
-print(len(questions))
-print(len(answers))
+def get_conversation_dict(sorted_chats):
+    conv_dict = {}
+    counter = 1
+    conv_ids = []
+    for i in range(1, len(sorted_chats) + 1):
+        if i < len(sorted_chats):
+            if (sorted_chats[i][0] - sorted_chats[i - 1][0]) == 1:
+                if sorted_chats[i - 1][1] not in conv_ids:
+                    conv_ids.append(sorted_chats[i - 1][1])
+                conv_ids.append(sorted_chats[i][1])
+            elif (sorted_chats[i][0] - sorted_chats[i - 1][0]) > 1:
+                conv_dict[counter] = conv_ids
+                conv_ids = []
+            counter += 1
+        else:
+            continue
+    return conv_dict
+
+
+def get_clean_q_and_a(conversations_dictionary):
+    ctx_and_target = []
+    for current_conv in conversations_dictionary.values():
+        if len(current_conv) % 2 != 0:
+            current_conv = current_conv[:-1]
+        for i in range(0, len(current_conv), 2):
+            ctx_and_target.append((current_conv[i], current_conv[i + 1]))
+    context, target = zip(*ctx_and_target)
+    context_dirty = list(context)
+    clean_questions = list()
+    for i in range(len(context_dirty)):
+        clean_questions.append(clean_text(context_dirty[i]))
+    target_dirty = list(target)
+    clean_answers = list()
+    for i in range(len(target_dirty)):
+        clean_answers.append('SOS '
+                             + clean_text(target_dirty[i])
+                             + ' EOS')
+    return clean_questions, clean_answers
+
+
+conversations = get_all_conversations()
+total = len(conversations)
+print("Total conversations in dataset: {}".format(total))
+all_sorted_chats = get_all_sorted_chats(conversations)
+conversation_dictionary = get_conversation_dict(all_sorted_chats)
+questions, answers = get_clean_q_and_a(conversation_dictionary)
+print("Questions in dataset: {}".format(len(questions)))
+print("Answers in dataset: {}".format(len(answers)))
+
 ########################################################################################################################
 ############################################# MODEL TRAINING ###########################################################
 ########################################################################################################################
 
-tokenizer = Tokenizer()
+target_regex = '!"#$%&()*+,-./:;<=>?@[\]^_`{|}~\t\n\'0123456789'
+tokenizer = Tokenizer(filters=target_regex)
 tokenizer.fit_on_texts(questions + answers)
 VOCAB_SIZE = len(tokenizer.word_index) + 1
 print('Vocabulary size : {}'.format(VOCAB_SIZE))
@@ -300,15 +341,13 @@ dropout_rate = 0.1
 
 
 def batch_generator(batch_size):
-    while True:
-        x_shape = (batch_size, MAX_LENGTH)
-        x_batch = np.zeros(shape=x_shape, dtype=np.float32)
-        y_batch = np.zeros(shape=x_shape, dtype=np.float32)
-        for i in range(batch_size):
-            idx = np.random.randint(0, encoder_input_data.shape[0])
-            x_batch[i] = encoder_input_data[idx]
-            y_batch[i] = decoder_input_data[idx]
-        yield x_batch, y_batch
+    n_samples = encoder_input_data.shape[0]
+    indices = np.arange(n_samples)
+    np.random.shuffle(indices)
+    for start in range(0, n_samples, batch_size):
+        end = min(start + batch_size, n_samples)
+        batch_idx = indices[start:end]
+        yield encoder_input_data[batch_idx], decoder_input_data[batch_idx]
 
 
 class CustomSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
@@ -327,7 +366,6 @@ class CustomSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
 learning_rate = CustomSchedule(d_model)
 optimizer = tf.keras.optimizers.Adam(learning_rate, beta_1=0.9, beta_2=0.98, epsilon=1e-9)
 loss_object = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True, reduction='none')
-generator = batch_generator(batch_size=BATCH_SIZE)
 
 
 def loss_function(real, pred):
@@ -356,7 +394,7 @@ def create_masks(input, target):
     return enc_padding_mask, combined_mask, dec_padding_mask
 
 
-EPOCHS = 150
+EPOCHS = 700
 
 train_step_signature = [
     tf.TensorSpec(shape=(None, None), dtype=tf.int64),
@@ -395,7 +433,7 @@ def str_to_tokens(sentence: str):
 def evaluate(inp_sentence):
     inp_sentence = str_to_tokens(inp_sentence)
     encoder_input = tf.expand_dims(inp_sentence, 0)
-    decoder_input = [tokenizer.word_index['start']]
+    decoder_input = [tokenizer.word_index['sos']]
     output = tf.expand_dims(decoder_input, 0)
     for _ in range(MAX_LENGTH):
         enc_padding_mask, combined_mask, dec_padding_mask = create_masks(
@@ -408,7 +446,7 @@ def evaluate(inp_sentence):
                                                      dec_padding_mask)
         predictions = predictions[:, -1:, :]
         predicted_id = tf.cast(tf.argmax(predictions, axis=-1), tf.int32)
-        if predicted_id == tokenizer.word_index['end']:
+        if predicted_id == tokenizer.word_index['eos']:
             return tf.squeeze(output, axis=0), attention_weights
         output = tf.concat([output, predicted_id], axis=-1)
     return tf.squeeze(output, axis=0), attention_weights
@@ -419,24 +457,65 @@ def translate(sentence):
     predicted_sentence = ''
     for i in result:
         for word, index in tokenizer.word_index.items():
-            if i == index:
+            if i == index and word != 'sos':
                 predicted_sentence += ' {}'.format(word)
-    print('Input: {}'.format(sentence))
-    print('Predicted translation: {}'.format(predicted_sentence))
+    print('Input phrase: {}'.format(sentence))
+    print('Output phrase: {}\n'.format(predicted_sentence))
 
 
-for epoch in range(EPOCHS):
-    start = time.time()
-    train_loss.reset_states()
-    train_accuracy.reset_states()
-    for batch in range(0, 1010):
-        inp, tar = next(generator)
-        train_step(inp, tar)
-        if batch % 50 == 0:
-            print('Epoch {} Batch {} Loss {:.4f} Accuracy {:.4f}'.format(
-                epoch + 1, batch, train_loss.result(), train_accuracy.result()))
-    print('Epoch {} Loss {:.4f} Accuracy {:.4f}'.format(epoch + 1, train_loss.result(), train_accuracy.result()))
-    print('Time taken for 1 epoch: {} secs\n'.format(time.time() - start))
+# ================================ TRAINING LOOP
+# for epoch in range(EPOCHS):
+#     start = time.time()
+#     train_loss.reset_states()
+#     generator = batch_generator(batch_size=BATCH_SIZE)
+#     train_accuracy.reset_states()
+#     while True:
+#         try:
+#             inp, tar = next(generator)
+#             train_step(inp, tar)
+#         except StopIteration:
+#             break
+#     print('Epoch {} Loss {:.4f} Accuracy {:.4f}'.format(epoch + 1, train_loss.result(), train_accuracy.result()))
+#     print('Time taken for 1 epoch: {} secs\n'.format(time.time() - start))
 
-print(translate('What is AI?'))
-print(translate('What is a computer?'))
+# ================================= TESTING MODEL
+# Input phrase: have fun tonight
+# Output phrase:  tons
+#
+# Input phrase: did you change your hair
+# Output phrase:  no
+#
+# Input phrase: do you have a family
+# Output phrase:  the handling it sir
+#
+# Input phrase: what do you want
+# Output phrase:  i just got a call two seconds ago some motherfucker called says he knows about the loop
+#
+# Input phrase: that is a shame
+# Output phrase:  not yet but i am hoping
+#
+# Input phrase: are you gentleman
+# Output phrase:  hey are you proposing
+#
+# Input phrase: what good stuff
+# Output phrase:  oh yeah well you know
+#
+# Input phrase: who are you
+# Output phrase:  i brought the girl remember
+#
+# Input phrase: Dallas. Korben Dallas
+# Output phrase:  yes that is fine thank you very much a thousand times over
+generator = batch_generator(batch_size=1)
+inp, tar = next(generator)
+train_step(inp, tar)
+transformer.load_weights("./weights.h5")
+
+translate('have fun tonight')
+translate('did you change your hair')
+translate('do you have a family')
+translate('what do you want')
+translate('that is a shame')
+translate('are you gentleman')
+translate('what good stuff')
+translate('who are you')
+translate('Dallas. Korben Dallas')
