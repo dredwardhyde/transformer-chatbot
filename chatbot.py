@@ -508,6 +508,7 @@ def translate(sentence):
 generator = batch_generator(batch_size=1)
 inp, tar = next(generator)
 train_step(inp, tar)
+transformer.summary()
 transformer.load_weights("./weights.h5")
 
 translate('have fun tonight')
